@@ -55,14 +55,16 @@ case "$mode" in
         [.[] | select(.commit_id == $head and .id > $base)]
         | last
         | if . == null then empty else {id, commit_id, submitted_at, state, body} end')"
-      if [[ -n "$found" ]]; then
-        printf '%s\n' "$found"
-        exit 0
-      fi
+      # Check head drift before accepting a review too: a review of a commit
+      # that is no longer the head is stale for this round.
       current="$(gh pr view "$pr" --json headRefOid -q .headRefOid)"
       if [[ "$current" != "$head" ]]; then
         echo "head moved: requested review for $head, PR head is now $current" >&2
         exit 3
+      fi
+      if [[ -n "$found" ]]; then
+        printf '%s\n' "$found"
+        exit 0
       fi
       if (( $(date +%s) >= deadline )); then
         echo "timeout: no new Copilot review (id > $baseline) for head $head after ${timeout}s" >&2
