@@ -39,7 +39,7 @@ query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) {
 }' \
   --jq '.data.repository.pullRequest.reviewThreads.nodes[]
     | select(.isResolved | not)
-    | select(.comments.nodes[0].author.login | test("^(copilot-pull-request-reviewer|Copilot)"))
+    | select(.comments.nodes[0].author.login | . == "copilot-pull-request-reviewer")
     | {thread_id: .id,
        comment_id: .comments.nodes[0].databaseId,
        path, line,
