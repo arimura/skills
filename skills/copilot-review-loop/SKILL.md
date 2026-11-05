@@ -21,11 +21,13 @@ Defaults (the user may override any of them):
 
 ## Pick the tooling
 
-- `gh auth status` succeeds → use **gh** (commands below; helper scripts in `scripts/`).
+- `gh auth status` succeeds → use **gh** (commands below).
+  - The helper scripts live in this skill's own directory, not in the repository under review. Call them by absolute path: `bash <skill-dir>/scripts/...`, where `<skill-dir>` is the directory that contains this SKILL.md.
+  - Keep the working directory in the target repository, because `gh` reads the repository from the working directory.
 - Otherwise, if `mcp__github__*` tools are available → use **MCP** (right-hand column of the table).
 - Neither → stop and tell the user.
 
-Copilot's reviewer login differs by API: REST reviews `copilot-pull-request-reviewer[bot]` (some payloads show `Copilot`), GraphQL `copilot-pull-request-reviewer`. Match those exactly. Do not match `/copilot/i`: it also catches `copilot-swe-agent` (the coding agent). If threads come from the coding agent, leave them alone and mention them in the report.
+Copilot's reviewer login differs by API: REST reviews `copilot-pull-request-reviewer[bot]`, GraphQL and the MCP thread list `copilot-pull-request-reviewer`, webhook payloads `Copilot`. Match those exactly. Do not match `/copilot/i`: it also catches `copilot-swe-agent` (the coding agent). If threads come from the coding agent, leave them alone and mention them in the report.
 
 Code always reaches the branch through `git commit` + `git push`, in MCP mode too. If `git push` has no credentials, stop and tell the user. Do not use `push_files` or `create_or_update_file`: they create remote commits that the local branch does not have.
 
@@ -34,24 +36,29 @@ Code always reaches the branch through `git commit` + `git push`, in MCP mode to
 | Find existing PR | `gh pr list --head <branch> --state open --json number,url` | `list_pull_requests` (head=`owner:branch`) |
 | Create PR | `gh pr create --base <base> --title ... --body-file ...` | `create_pull_request` |
 | Head SHA | `gh pr view <n> --json headRefOid -q .headRefOid` | `pull_request_read` method `get` → `head.sha` |
-| Already requested? | `gh pr view <n> --json reviewRequests` | `pull_request_read` method `get` → `requested_reviewers` |
+| Already requested? | `gh pr view <n> --json reviewRequests` | not exposed; request unconditionally |
+| Review baseline (before requesting) | `bash <skill-dir>/scripts/wait-for-copilot-review.sh baseline <n>` | `pull_request_read` method `get_reviews` → largest `id` among Copilot reviews (0 if none) |
 | Request review | `gh pr edit <n> --add-reviewer @copilot`; if unsupported: `gh api -X POST repos/{o}/{r}/pulls/<n>/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'` | `request_copilot_review` |
-| Wait for review | `bash scripts/wait-for-copilot-review.sh <n>` | poll `pull_request_read` method `get_reviews` for a Copilot review with `commit_id` == head SHA |
-| Unresolved Copilot threads | `bash scripts/copilot-threads.sh <n>` | `pull_request_read` method `get_review_comments`; keep unresolved threads whose first comment is Copilot's |
-| Reply to a thread | `gh api -X POST repos/{o}/{r}/pulls/<n>/comments/<comment_id>/replies -f body='...'` | `add_reply_to_pull_request_comment` (numeric `commentId`) |
+| Wait for review | `bash <skill-dir>/scripts/wait-for-copilot-review.sh wait <n> <baseline>` | poll `pull_request_read` method `get_reviews` for a Copilot review with `id` > baseline and `commit_id` == head SHA |
+| Unresolved Copilot threads | `bash <skill-dir>/scripts/copilot-threads.sh <n>` | `pull_request_read` method `get_review_comments`; keep threads with `is_resolved: false` whose first comment's author is Copilot's |
+| Reply to a thread | `gh api -X POST repos/{o}/{r}/pulls/<n>/comments/<comment_id>/replies -f body='...'` | `add_reply_to_pull_request_comment`. The numeric `commentId` is the number in the comment's `html_url` anchor `#discussion_r<id>` |
 | Resolve a thread | `gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -F id=<thread_id>` | `resolve_review_thread` (`PRRT_...` id) |
 
-`wait-for-copilot-review.sh` exits 0 and prints the review JSON when it is found, or exits 2 on timeout. Its default 15‑minute wait is longer than a default shell-tool timeout, so run it with a longer timeout or in the background. In MCP mode, wait at least 30 s between polls, using whatever wait or wake-up mechanism the harness provides.
+`wait-for-copilot-review.sh wait` exits 0 and prints the review JSON when the review is found, or exits 2 on timeout. Its default 15‑minute wait is longer than a default shell-tool timeout, so run it with a longer timeout or in the background.
+
+In MCP mode, wait for the review in one of two ways:
+- If the harness can subscribe to PR activity, subscribe. The review's arrival then wakes the session.
+- Otherwise, poll at least 30 s apart, using whatever wait mechanism the harness provides.
 
 ## The loop
 
 **0. Pre-flight.** The working tree is clean, and the branch is pushed and matches the remote. Run the repo's own fast checks (tests and lint) so Copilot does not review broken code. Reuse an open PR for the branch if one exists. Otherwise create one, following the repo's PR template if it has one.
 
-**1. Request.** Record the head SHA. If Copilot is already a requested reviewer (because a ruleset auto-requested it on PR creation or on push), skip the request. Otherwise request it. If the request fails with 404 or 422, or Copilot never appears as a reviewer, Copilot review is not enabled here. Stop and report that.
+**1. Request.** Record the head SHA, and the review baseline: the id of the newest existing Copilot review. If Copilot is already a requested reviewer (because a ruleset auto-requested it on PR creation or on push), skip the request. Otherwise request it. If the request fails with 404 or 422, or Copilot never appears as a reviewer, Copilot review is not enabled here. Stop and report that.
 
-**2. Wait** for the Copilot review on that head SHA. Do not push during the wait. Anything you change meanwhile stays local and goes into this round's commit in step 5.
-- If the wait times out, re-request once and wait again. If the second wait also times out, stop and report.
-- If the review body says Copilot hit an error or could not review, re-request once.
+**2. Wait** for a Copilot review that is newer than the baseline and on that head SHA. Do not push during the wait. Anything you change meanwhile stays local and goes into this round's commit in step 5.
+- If the wait times out, take a fresh baseline, re-request once and wait again. If the second wait also times out, stop and report.
+- If the review body says Copilot hit an error or could not review, take a fresh baseline and re-request once.
 
 **3. Collect.** Read the review body, including any "low confidence" comments folded inside it. Then list the unresolved Copilot threads.
 
@@ -65,7 +72,11 @@ Code always reaches the branch through `git commit` + `git push`, in MCP mode to
 
 Outdated threads are triaged too: check whether the latest code still has the issue.
 
-**5. Push.** Run the fast checks again. Make one commit per round (e.g. `Address Copilot review (round k)`) and push normally. Do not force-push, which detaches the review anchors. Then post the replies and resolve the threads.
+**5. Push.** This step depends on whether the round changed any files.
+- **Files changed:** run the fast checks again. Make one commit per round (e.g. `Address Copilot review (round k)`) and push normally. Do not force-push, which detaches the review anchors.
+- **Nothing changed** (no Fix verdicts and no local edits): skip the commit and push.
+
+Either way, post the replies and resolve the threads.
 
 **6. Converged?** Stop when the first of these is true:
 1. **Converged:** the Copilot review for the current head has no comment that gets a **Fix** verdict. That covers zero comments, and it covers comments that are all declined repeats or nits. Pending **Ask user** items do not block convergence; list them in the report.
@@ -90,7 +101,7 @@ Do not merge unless the user explicitly asked you to.
 
 ## Common mistakes
 
-- Accepting an older Copilot review as this round's result. Match on `commit_id` == head.
+- Accepting an older Copilot review as this round's result. Match on `commit_id` == head *and* `id` > the baseline. The head check alone still accepts a failed review when you re-request on the same commit.
 - Pushing while a review is pending. The review then lands on a stale SHA, and the round is wasted.
 - Applying every suggestion blindly. Copilot produces false positives, so verify each one against the code.
 - Re-arguing a declined point every round. A repeat gets **Decline** ("already addressed in round k") and does not block convergence.
