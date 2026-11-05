@@ -15,7 +15,7 @@ Defaults (the user may override any of them):
 
 | Setting | Default |
 |---|---|
-| Max rounds | 5 (a round = one Copilot review request; the first review counts as round 1) |
+| Max rounds | 5. A round is one head commit reviewed by Copilot; the first review is round 1. A re-request after a timeout or error belongs to the same round. |
 | Wait per review | 15 min, poll every 30 s |
 | PR state | Ready for review (not draft): automatic Copilot review can skip drafts |
 
@@ -39,12 +39,15 @@ Code always reaches the branch through `git commit` + `git push`, in MCP mode to
 | Already requested? | `gh pr view <n> --json reviewRequests` | not exposed; request unconditionally |
 | Review baseline (before requesting) | `bash <skill-dir>/scripts/wait-for-copilot-review.sh baseline <n>` | `pull_request_read` method `get_reviews` → largest `id` among Copilot reviews (0 if none) |
 | Request review | `gh pr edit <n> --add-reviewer @copilot`; if unsupported: `gh api -X POST repos/{o}/{r}/pulls/<n>/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'` | `request_copilot_review` |
-| Wait for review | `bash <skill-dir>/scripts/wait-for-copilot-review.sh wait <n> <baseline>` | poll `pull_request_read` method `get_reviews` for a Copilot review with `id` > baseline and `commit_id` == head SHA |
+| Wait for review | `bash <skill-dir>/scripts/wait-for-copilot-review.sh wait <n> <baseline> <head-sha>` | poll `pull_request_read` method `get_reviews` for a Copilot review with `id` > baseline and `commit_id` == head SHA |
 | Unresolved Copilot threads | `bash <skill-dir>/scripts/copilot-threads.sh <n>` | `pull_request_read` method `get_review_comments`; keep threads with `is_resolved: false` whose first comment's author is Copilot's |
 | Reply to a thread | `gh api -X POST repos/{o}/{r}/pulls/<n>/comments/<comment_id>/replies -f body='...'` | `add_reply_to_pull_request_comment`. The numeric `commentId` is the number in the comment's `html_url` anchor `#discussion_r<id>` |
 | Resolve a thread | `gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -F id=<thread_id>` | `resolve_review_thread` (`PRRT_...` id) |
 
-`wait-for-copilot-review.sh wait` exits 0 and prints the review JSON when the review is found, or exits 2 on timeout. Its default 15‑minute wait is longer than a default shell-tool timeout, so run it with a longer timeout or in the background.
+`wait-for-copilot-review.sh wait` has three outcomes:
+- exit 0: the review was found, and its JSON is printed.
+- exit 2: timeout.
+- exit 3: the PR head moved during the wait. Its default 15‑minute wait is longer than a default shell-tool timeout, so run it with a longer timeout or in the background.
 
 In MCP mode, wait for the review in one of two ways:
 - If the harness can subscribe to PR activity, subscribe. The review's arrival then wakes the session.
@@ -59,8 +62,9 @@ In MCP mode, wait for the review in one of two ways:
 **2. Wait** for a Copilot review that is newer than the baseline and on that head SHA. Do not push during the wait. Anything you change meanwhile stays local and goes into this round's commit in step 5.
 - If the wait times out, take a fresh baseline, re-request once and wait again. If the second wait also times out, stop and report.
 - If the review body says Copilot hit an error or could not review, take a fresh baseline and re-request once.
+- If the PR head moves during the wait, someone else pushed. Pull their commits, then restart this round on the new head with a fresh baseline.
 
-**3. Collect.** Read the review body, including any "low confidence" comments folded inside it. Then list the unresolved Copilot threads.
+**3. Collect.** List the unresolved Copilot threads, and read the review body too. The body can carry findings that have no inline thread, such as "low confidence" comments or "previously missed issues" in unchanged code. Triage those as well. They have no thread to reply on, so post their verdicts as one PR comment.
 
 **4. Triage each comment** against the actual code. Keep a ledger of every verdict across rounds (round, comment, verdict, sha or reason). You need it to spot repeats and to write the report. Every comment gets exactly one verdict:
 
