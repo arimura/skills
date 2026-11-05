@@ -5,7 +5,7 @@ description: Use when asked to open a PR and loop GitHub Copilot code review unt
 
 # Copilot Review Loop
 
-Open (or reuse) a PR, draft or not, then repeat: request a Copilot review → wait for it → triage every finding → push fixes, reply, resolve. Stop when a review has nothing worth fixing, or after 5 rounds (the user may change the cap).
+Open (or reuse) a PR, draft or not, then repeat: request a Copilot review → wait for it → triage every finding → push fixes (`git push` only), reply, resolve. Stop when a review has nothing worth fixing, or after 5 rounds (the user may change the cap).
 
 - **This round's review** is by `copilot-pull-request-reviewer[bot]` exactly (not `copilot-swe-agent`), on the commit you requested, and newer than the reviews that existed when you requested it. Do not push while waiting.
 - **Read the review body.** Findings can appear only there (e.g. "previously missed issues"), even under a "No open issues" heading.
