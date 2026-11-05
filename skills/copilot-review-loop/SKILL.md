@@ -44,6 +44,8 @@ Code always reaches the branch through `git commit` + `git push`, in MCP mode to
 | Reply to a thread | `gh api -X POST repos/{o}/{r}/pulls/<n>/comments/<comment_id>/replies -f body='...'` | `add_reply_to_pull_request_comment`. The numeric `commentId` is the number in the comment's `html_url` anchor `#discussion_r<id>` |
 | Resolve a thread | `gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -F id=<thread_id>` | `resolve_review_thread` (`PRRT_...` id) |
 
+In MCP mode, `get_reviews` and `get_review_comments` are paginated, and your own thread replies show up as reviews too. Read every page (`perPage` 100, then the next page or the `after` cursor) before taking a baseline or deciding that no new review has arrived. The newest review is on the last page.
+
 `wait-for-copilot-review.sh wait` has three outcomes:
 - exit 0: the review was found, and its JSON is printed.
 - exit 2: timeout.

@@ -10,6 +10,10 @@
 # replies    -> number of comments after the root (>0 means someone already answered)
 set -euo pipefail
 
+for cmd in gh jq; do
+  command -v "$cmd" >/dev/null || { echo "missing dependency: $cmd" >&2; exit 1; }
+done
+
 pr="${1:?usage: copilot-threads.sh <pr-number>}"
 owner="$(gh repo view --json owner -q .owner.login)"
 name="$(gh repo view --json name -q .name)"

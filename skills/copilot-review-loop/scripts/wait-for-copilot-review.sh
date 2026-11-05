@@ -20,6 +20,10 @@
 # failed review that you are re-requesting.
 set -euo pipefail
 
+for cmd in gh jq; do
+  command -v "$cmd" >/dev/null || { echo "missing dependency: $cmd" >&2; exit 1; }
+done
+
 usage() {
   sed -n '2,17p' "$0" >&2
   exit 1
