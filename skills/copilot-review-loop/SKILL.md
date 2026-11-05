@@ -17,7 +17,7 @@ Defaults (the user may override any of them):
 |---|---|
 | Max rounds | 5. A round is one head commit reviewed by Copilot; the first review is round 1. A re-request after a timeout or error belongs to the same round. |
 | Wait per review | 15 min, poll every 30 s |
-| PR state | Ready for review (not draft): automatic Copilot review can skip drafts |
+| PR state | Draft is fine, and the loop runs the same way on a draft. An existing PR keeps its draft state. A new PR is created as a draft unless the user or the repo's convention says otherwise. |
 
 ## Pick the tooling
 
@@ -31,7 +31,7 @@ Code always reaches the branch through `git commit` + `git push`, in MCP mode to
 | Step | gh | GitHub MCP |
 |---|---|---|
 | Find existing PR | `gh pr list --head <branch> --state open --json number,url` | `list_pull_requests` (head=`owner:branch`) |
-| Create PR | `gh pr create --base <base> --title ... --body-file ...` | `create_pull_request` |
+| Create PR | `gh pr create --draft --base <base> --title ... --body-file ...` | `create_pull_request` (`draft: true`) |
 | Head SHA | `gh pr view <n> --json headRefOid -q .headRefOid` | `pull_request_read` method `get` → `head.sha` |
 | Already requested? | `gh pr view <n> --json reviewRequests` | not exposed; request unconditionally |
 | Copilot reviews | the reviews command below | `pull_request_read` method `get_reviews`, every page; keep reviews whose `user.login` is `copilot-pull-request-reviewer[bot]` |
@@ -97,7 +97,11 @@ Use the harness's own wait mechanism. Do not hold the foreground in a long sleep
 
 **0. Pre-flight.** The working tree is clean, and the branch is pushed and matches the remote. Run the repo's own fast checks (tests and lint) so Copilot does not review broken code. Reuse an open PR for the branch if one exists. Otherwise create one, following the repo's PR template if it has one.
 
-**1. Request.** Record the head SHA, and the review baseline: the id of the newest existing Copilot review. If Copilot is already a requested reviewer (because a ruleset auto-requested it on PR creation or on push), skip the request. Otherwise request it. If the request fails with 404 or 422, or Copilot never appears as a reviewer, Copilot review is not enabled here. Stop and report that.
+**1. Request.** Record the head SHA, and the review baseline: the id of the newest existing Copilot review. If Copilot is already a requested reviewer (because a ruleset auto-requested it on PR creation or on push), skip the request. Otherwise request it.
+
+On a draft, always request it explicitly. Automatic review skips drafts unless "Review draft pull requests" is enabled in a ruleset or in the author's settings, so a draft cannot rely on an automatic request.
+
+If the request fails with 404 or 422, or Copilot never appears as a reviewer, Copilot review is not enabled here. Stop and report that. If this happens on a draft, do not mark the PR ready for review to work around it: that notifies human reviewers. Report it and let the user decide.
 
 **2. Wait** for a Copilot review that is newer than the baseline and on that head SHA. Do not push during the wait. Anything you change meanwhile stays local and goes into this round's commit in step 5.
 - If the wait times out, take a fresh baseline, re-request once and wait again. If the second wait also times out, stop and report.
@@ -140,6 +144,8 @@ If none of these holds, go back to step 1 with the new head SHA.
 2. Rounds run, and which stop condition ended the loop.
 3. Per round: one line per comment, written as `fixed (sha)`, `declined (reason)` or `needs your decision`.
 4. CI state (`gh pr checks <n>` or `get_check_runs`) and what still blocks the merge, such as a required human approval. Copilot's review never counts as an approval.
+
+If the PR is still a draft, also say this in the report: when it is marked ready for review, automatic Copilot review (if the repo has it) may run once more, at an extra cost.
 
 Do not merge unless the user explicitly asked you to.
 
