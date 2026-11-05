@@ -19,14 +19,9 @@ Defaults (the user may override any of them):
 | Wait per review | 15 min, poll every 30 s |
 | PR state | Draft is fine, and the loop runs the same way on a draft. An existing PR keeps its draft state. A new PR is created as a draft unless the user or the repo's convention says otherwise. |
 
-## Pick the tooling
+## GitHub operations
 
-- If the environment's instructions say GitHub operations go through MCP tools (as in Claude Code cloud sessions), use **MCP**, even if `gh` is installed and authenticated.
-- Otherwise, if `gh` is authenticated (`gh auth status` succeeds), use **gh**. Run it from the target repository: `gh api` fills `{owner}` and `{repo}` from the working directory.
-- Otherwise, if `mcp__github__*` tools are available → use **MCP** (right-hand column of the table).
-- Neither → stop and tell the user.
-
-Code always reaches the branch through `git commit` + `git push`, in MCP mode too. If `git push` has no credentials, stop and tell the user. Do not use `push_files` or `create_or_update_file`: they create remote commits that the local branch does not have.
+Use whichever GitHub access the environment provides. The table lists the equivalent commands for `gh` and for the GitHub MCP tools.
 
 | Step | gh | GitHub MCP |
 |---|---|---|
@@ -39,6 +34,8 @@ Code always reaches the branch through `git commit` + `git push`, in MCP mode to
 | Unresolved Copilot threads | the GraphQL query below | `pull_request_read` method `get_review_comments`, every page; keep threads with `is_resolved: false` whose first comment's author is `copilot-pull-request-reviewer` |
 | Reply to a thread | `gh api -X POST repos/{owner}/{repo}/pulls/<n>/comments/<comment_id>/replies -f body='...'` | `add_reply_to_pull_request_comment`. The numeric `commentId` is the number in the comment's `html_url` anchor `#discussion_r<id>` |
 | Resolve a thread | `gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -F id=<thread_id>` | `resolve_review_thread` (`PRRT_...` id) |
+
+The `gh` commands below are run from the target repository, because `gh api` fills `{owner}` and `{repo}` from the working directory.
 
 Copilot reviews with gh:
 
@@ -121,7 +118,10 @@ If the request fails with 404 or 422, or Copilot never appears as a reviewer, Co
 Outdated threads are triaged too: check whether the latest code still has the issue.
 
 **5. Push.** This step depends on whether the round changed any files.
-- **Files changed:** run the fast checks again. Make one commit per round (e.g. `Address Copilot review (round k)`) and push normally. Do not force-push, which detaches the review anchors.
+- **Files changed:** run the fast checks again. Make one commit per round (e.g. `Address Copilot review (round k)`) and push normally with `git push`.
+  - Do not force-push, which detaches the review anchors.
+  - Do not push through MCP `push_files` or `create_or_update_file` either. They create remote commits that the local branch does not have, so the next round's push is rejected.
+  - If `git push` has no credentials, stop and tell the user.
 - **Nothing changed** (no Fix verdicts and no local edits): skip the commit and push.
 
 Either way, post the replies and resolve the threads.
