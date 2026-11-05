@@ -11,7 +11,7 @@ and expects the ZIP to hold the skill folder at its root:
     <skill-name>.zip
     └── <skill-name>/
         ├── SKILL.md
-        └── scripts/...
+        └── (any supporting files)
 
 Checks (from the claude.ai custom-skill requirements):
     - SKILL.md exists and starts with YAML frontmatter

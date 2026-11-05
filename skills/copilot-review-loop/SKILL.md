@@ -22,13 +22,9 @@ Defaults (the user may override any of them):
 ## Pick the tooling
 
 - If the environment's instructions say GitHub operations go through MCP tools (as in Claude Code cloud sessions), use **MCP**, even if `gh` is installed and authenticated.
-- Otherwise, if `gh auth status` succeeds → use **gh** (commands below).
-  - The helper scripts live in this skill's own directory, not in the repository under review. Call them by absolute path: `bash <skill-dir>/scripts/...`, where `<skill-dir>` is the directory that contains this SKILL.md.
-  - Keep the working directory in the target repository, because `gh` reads the repository from the working directory.
+- Otherwise, if `gh` is authenticated (`gh auth status` succeeds), use **gh**. Run it from the target repository: `gh api` fills `{owner}` and `{repo}` from the working directory.
 - Otherwise, if `mcp__github__*` tools are available → use **MCP** (right-hand column of the table).
 - Neither → stop and tell the user.
-
-Copilot's reviewer login differs by API: REST reviews `copilot-pull-request-reviewer[bot]`, GraphQL and the MCP thread list `copilot-pull-request-reviewer`, webhook payloads `Copilot`. Match those exactly. Do not match `/copilot/i`: it also catches `copilot-swe-agent` (the coding agent). If threads come from the coding agent, leave them alone and mention them in the report.
 
 Code always reaches the branch through `git commit` + `git push`, in MCP mode too. If `git push` has no credentials, stop and tell the user. Do not use `push_files` or `create_or_update_file`: they create remote commits that the local branch does not have.
 
@@ -38,23 +34,64 @@ Code always reaches the branch through `git commit` + `git push`, in MCP mode to
 | Create PR | `gh pr create --base <base> --title ... --body-file ...` | `create_pull_request` |
 | Head SHA | `gh pr view <n> --json headRefOid -q .headRefOid` | `pull_request_read` method `get` → `head.sha` |
 | Already requested? | `gh pr view <n> --json reviewRequests` | not exposed; request unconditionally |
-| Review baseline (before requesting) | `bash <skill-dir>/scripts/wait-for-copilot-review.sh baseline <n>` | `pull_request_read` method `get_reviews` → largest `id` among Copilot reviews (0 if none) |
-| Request review | `gh pr edit <n> --add-reviewer @copilot`; if unsupported: `gh api -X POST repos/{o}/{r}/pulls/<n>/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'` | `request_copilot_review` |
-| Wait for review | `bash <skill-dir>/scripts/wait-for-copilot-review.sh wait <n> <baseline> <head-sha>` | poll `pull_request_read` method `get_reviews` for a Copilot review with `id` > baseline and `commit_id` == head SHA |
-| Unresolved Copilot threads | `bash <skill-dir>/scripts/copilot-threads.sh <n>` | `pull_request_read` method `get_review_comments`; keep threads with `is_resolved: false` whose first comment's author is Copilot's |
-| Reply to a thread | `gh api -X POST repos/{o}/{r}/pulls/<n>/comments/<comment_id>/replies -f body='...'` | `add_reply_to_pull_request_comment`. The numeric `commentId` is the number in the comment's `html_url` anchor `#discussion_r<id>` |
+| Copilot reviews | the reviews command below | `pull_request_read` method `get_reviews`, every page; keep reviews whose `user.login` is `copilot-pull-request-reviewer[bot]` |
+| Request review | `gh pr edit <n> --add-reviewer @copilot`; if unsupported: `gh api -X POST repos/{owner}/{repo}/pulls/<n>/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'` | `request_copilot_review` |
+| Unresolved Copilot threads | the GraphQL query below | `pull_request_read` method `get_review_comments`, every page; keep threads with `is_resolved: false` whose first comment's author is `copilot-pull-request-reviewer` |
+| Reply to a thread | `gh api -X POST repos/{owner}/{repo}/pulls/<n>/comments/<comment_id>/replies -f body='...'` | `add_reply_to_pull_request_comment`. The numeric `commentId` is the number in the comment's `html_url` anchor `#discussion_r<id>` |
 | Resolve a thread | `gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -F id=<thread_id>` | `resolve_review_thread` (`PRRT_...` id) |
 
-In MCP mode, `get_reviews` and `get_review_comments` are paginated, and your own thread replies show up as reviews too. Read every page (`perPage` 100, then the next page or the `after` cursor) before taking a baseline or deciding that no new review has arrived. The newest review is on the last page.
+Copilot reviews with gh:
 
-`wait-for-copilot-review.sh wait` has three outcomes:
-- exit 0: the review was found, and its JSON is printed.
-- exit 2: timeout.
-- exit 3: the PR head moved during the wait. Its default 15‑minute wait is longer than a default shell-tool timeout, so run it with a longer timeout or in the background.
+```bash
+gh api --paginate repos/{owner}/{repo}/pulls/<n>/reviews \
+  --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]") | {id, commit_id, state, body}'
+```
 
-In MCP mode, wait for the review in one of two ways:
-- If the harness can subscribe to PR activity, subscribe. The review's arrival then wakes the session.
-- Otherwise, poll at least 30 s apart, using whatever wait mechanism the harness provides.
+Unresolved Copilot threads with gh. `id` is the thread id used to resolve it, and `comments.nodes[0].databaseId` is the comment id used to reply:
+
+```bash
+gh api graphql --paginate -F owner='{owner}' -F name='{repo}' -F pr=<n> -f query='
+query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){
+  repository(owner:$owner,name:$name){ pullRequest(number:$pr){
+    reviewThreads(first:100,after:$endCursor){
+      pageInfo{ hasNextPage endCursor }
+      nodes{ id isResolved isOutdated path line
+        comments(first:1){ totalCount nodes{ databaseId body author{ login } } } } } } } }' \
+  --jq '.data.repository.pullRequest.reviewThreads.nodes[]
+    | select((.isResolved | not) and .comments.nodes[0].author.login == "copilot-pull-request-reviewer")'
+```
+
+### Copilot's identity
+
+Copilot's reviewer login depends on where you read it:
+
+| Where | Login |
+|---|---|
+| REST reviews | `copilot-pull-request-reviewer[bot]` |
+| GraphQL and the MCP thread list | `copilot-pull-request-reviewer` |
+| Webhook payloads | `Copilot` |
+
+Match these exactly. A loose match such as `/copilot/i` also catches `copilot-swe-agent`, the Copilot coding agent. If any threads come from the coding agent, leave them alone and mention them in the report.
+
+### Which review is this round's review
+
+Before each request (and each re-request), record two values:
+- **head SHA:** the PR head at that moment.
+- **baseline:** the largest `id` among existing Copilot reviews, or 0 if there are none.
+
+A Copilot review is this round's review only when all of these hold:
+1. Its author is the Copilot reviewer, matched exactly as above.
+2. Its `id` is greater than the baseline. This rejects an earlier review of the same commit, such as a failed one you are re-requesting.
+3. Its `commit_id` equals the recorded head SHA. This rejects reviews of older pushes.
+4. The PR head is still that SHA when you accept the review. If the head has moved, someone else pushed: pull their commits, then restart the round on the new head with a fresh baseline.
+
+Lists are paginated, and your own thread replies show up as reviews. Read every page before taking a baseline or concluding that no review has arrived: use `--paginate` with gh, or every page with MCP. The newest review is on the last page.
+
+### Waiting
+
+Use the harness's own wait mechanism. Do not hold the foreground in a long sleep loop.
+- If the session can subscribe to PR activity, subscribe. The review's arrival then wakes the session.
+- Otherwise, re-check the Copilot reviews at least 30 s apart, using a background or scheduled wait.
 
 ## The loop
 
