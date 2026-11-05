@@ -1,6 +1,6 @@
 ---
 name: copilot-review-loop
-description: Use when asked to open a pull request and iterate on GitHub Copilot code review until its feedback converges, or to run repeated Copilot review rounds on an existing PR (e.g. "PR作ってCopilotレビューを収束するまで回して", "loop Copilot review", "address Copilot comments until it's clean").
+description: Use when asked to open a PR and loop GitHub Copilot code review until its feedback converges, or to run repeated Copilot review rounds on an existing PR ("Copilotレビューを収束するまで回して").
 ---
 
 # Copilot Review Loop
@@ -21,7 +21,8 @@ Defaults (the user may override any of them):
 
 ## Pick the tooling
 
-- `gh auth status` succeeds → use **gh** (commands below).
+- If the environment's instructions say GitHub operations go through MCP tools (as in Claude Code cloud sessions), use **MCP**, even if `gh` is installed and authenticated.
+- Otherwise, if `gh auth status` succeeds → use **gh** (commands below).
   - The helper scripts live in this skill's own directory, not in the repository under review. Call them by absolute path: `bash <skill-dir>/scripts/...`, where `<skill-dir>` is the directory that contains this SKILL.md.
   - Keep the working directory in the target repository, because `gh` reads the repository from the working directory.
 - Otherwise, if `mcp__github__*` tools are available → use **MCP** (right-hand column of the table).
